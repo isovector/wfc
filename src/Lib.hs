@@ -1,10 +1,12 @@
-{-# LANGUAGE DeriveAnyClass             #-}
-{-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE DerivingStrategies         #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE NoImplicitPrelude          #-}
-{-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE ViewPatterns               #-}
+{-# LANGUAGE DeriveAnyClass                                      #-}
+{-# LANGUAGE DeriveGeneric                                       #-}
+{-# LANGUAGE DerivingStrategies                                  #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving                          #-}
+{-# LANGUAGE NoImplicitPrelude                                   #-}
+{-# LANGUAGE StandaloneDeriving                                  #-}
+{-# LANGUAGE TypeApplications                                    #-}
+{-# LANGUAGE ViewPatterns                                        #-}
+{-# OPTIONS_GHC -Wall -fno-warn-orphans -fno-warn-unused-imports #-}
 
 module Lib where
 
@@ -64,9 +66,9 @@ refRotMat = refMat !*! rotMat
 
 packPattern :: Pixel a => Int -> Coord -> Image a -> Pattern a
 packPattern n (V2 x y) img = Pattern . V.fromList $ do
-  y <- [y..y+n-1]
-  x <- [x..x+n-1]
-  pure $ pixelAt img x y
+  y' <- [y..y+n-1]
+  x' <- [x..x+n-1]
+  pure $ pixelAt img x' y'
 
 packPosition :: Int -> Coord -> Int
 packPosition n (V2 x y) = y * n + x
@@ -117,8 +119,8 @@ allPatterns
     -> Image a
     -> [Pattern a]
 allPatterns n img = force $ do
-  x <- [0..imageWidth img]
   y <- [0..imageHeight img]
+  x <- [0..imageWidth img]
   guard $ x + n < imageWidth img
   guard $ y + n < imageHeight img
   let xy = V2 x y
@@ -174,7 +176,7 @@ stamp
 stamp n xy p w =
   let dxy@(V2 dx dy) = pos w - xy
    in case abs dx <= n && abs dy <= n of
-        True -> S.filter (agrees n dxy p) $ extract w
+        True -> S.filter (\p' -> agrees n dxy p p') $ extract w
         False -> extract w
 
 entropy :: Quantum (SuperPos a) -> Int
@@ -192,13 +194,24 @@ minEntropy w h q = minimumBy (comparing fst) $ do
 patternToPixel :: Pattern a -> a
 patternToPixel (Pattern v) = V.head v
 
+-- blend :: SuperPos PixelRGB8 -> PixelRGB8
+-- blend ps =
+--   let unpack = \(PixelRGB8 r g b) -> ZipList [r, g, b]
+--       elems = fmap unpack $ toList ps
+--       len = fromIntegral $ length elems
+--       ZipList [r', g', b'] = fmap ((`div` len) . sum) $ sequenceA elems
+--    in PixelRGB8 r' g' b'
+
 blend :: SuperPos PixelRGB8 -> PixelRGB8
-blend ps =
-  let unpack (PixelRGB8 r g b) = ZipList [r, g, b]
-      elems = fmap unpack $ toList ps
-      len = fromIntegral $ length elems
-      ZipList [r', g', b'] = showTrace $ fmap ((`div` max len 1) . sum) $ sequenceA elems
-   in PixelRGB8 r' g' b'
+blend ps
+  | S.null ps = PixelRGB8 255 0 255
+  | otherwise =
+      let unpack = \(PixelRGB8 r g b) -> ZipList [r, g, b]
+          elems = fmap unpack $ toList ps
+          len = length elems
+          ZipList [r', g', b'] =
+            fmap (fromIntegral . (`div` len) . sum . fmap fromIntegral) $ sequenceA elems
+      in PixelRGB8 r' g' b'
 
 render :: Int -> Int -> Quantum (SuperPos PixelRGB8) -> Image PixelRGB8
 render w h (extend (blend . extract) -> q) = generateImage makePixel w h
@@ -208,12 +221,12 @@ render w h (extend (blend . extract) -> q) = generateImage makePixel w h
 
 main :: IO ()
 main = do
-  let w = 100
-      h = 100
-      n = 3
-      q'' = iterate (\q -> q =>> stampFirst n (fst $ minEntropy w h q))
+  let w = 10
+      h = 10
+      n = 2
+      q'' = iterate (\q -> q =>> stampFirst n (fst $ showTrace $ minEntropy w h q))
           $ initialize n bricks
-      q' = q'' !! 0
+      q' = q'' !! 20
   writePng "result.png"
     . render w h
     $ extend (S.map patternToPixel . extract) q'
