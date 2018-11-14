@@ -31,6 +31,8 @@ dependencies:
 - base-prelude
 - linear
 - comonad
+- deepseq
+- adjunctions
 
 library:
   source-dirs: src
