@@ -21,6 +21,16 @@ description:         Please see the README on GitHub at <https://github.com/isov
 
 dependencies:
 - base >= 4.7 && < 5
+- vector
+- mtl
+- containers
+- unordered-containers
+- transformers
+- lens
+- JuicyPixels
+- base-prelude
+- linear
+- comonad
 
 library:
   source-dirs: src
