@@ -18,11 +18,14 @@ import qualified Data.Vector as V
 import Codec.Picture
 import BasePrelude hiding (peek)
 import Linear.V2
-import Linear.Matrix
+import Linear.Matrix hiding (trace)
 import qualified Data.Set as S
 
 deriving instance Generic PixelRGB8
 deriving instance NFData PixelRGB8
+
+showTrace :: Show a => a -> a
+showTrace = trace =<< show
 
 bricks :: Image PixelRGB8
 bricks =
@@ -87,11 +90,11 @@ wrap x n
 agrees
     :: Eq a
     => Int
-    -> Pattern a
-    -> Pattern a
     -> Coord
+    -> Pattern a
+    -> Pattern a
     -> Bool
-agrees n (Pattern p1) (Pattern p2) (V2 dx dy) = and $ do
+agrees n (V2 dx dy) (Pattern p1) (Pattern p2) = and $ do
   x <- uncurry enumFromTo $ fmap (subtract 1) $ wrap dx n
   y <- uncurry enumFromTo $ fmap (subtract 1) $ wrap dy n
   pure $ p1 V.! packPosition n (V2 x y)
@@ -137,9 +140,10 @@ type SuperPos = S.Set
 
 initialize
     :: (Pixel a, Ord a, NFData a)
-    => Image a
-    -> Quantum (SuperPos a)
-initialize img = store (const $ colors img) (V2 0 0)
+    => Int
+    -> Image a
+    -> Quantum (SuperPos (Pattern a))
+initialize n img = store (const . S.fromList $ allPatterns n img) (V2 0 0)
 
 
 inNSquare :: Int -> Coord -> Bool
@@ -150,19 +154,28 @@ inNSquare n (V2 x y) = and
   , y < n
   ]
 
+stampFirst
+    :: Eq a
+    => Int
+    -> Coord
+    -> Quantum (SuperPos (Pattern a))
+    -> SuperPos (Pattern a)
+stampFirst n xy w =
+  stamp n xy (head . toList $ extract w) w
+
 
 stamp
-    :: Int
+    :: Eq a
+    => Int
+    -> Coord
     -> Pattern a
-    -> Quantum (SuperPos a)
-    -> Quantum (SuperPos a)
-stamp n p w =
-  let xy = pos w
-   in w =>> \w' ->
-        let dxy@(V2 dx dy) = pos w' - xy
-         in case inNSquare n dxy of
-              True  -> S.singleton $ unpackPattern n dxy p
-              False -> extract w'  -- restrict posibilties
+    -> Quantum (SuperPos (Pattern a))
+    -> SuperPos (Pattern a)
+stamp n xy p w =
+  let dxy@(V2 dx dy) = pos w - xy
+   in case abs dx <= n && abs dy <= n of
+        True -> S.filter (agrees n dxy p) $ extract w
+        False -> extract w
 
 entropy :: Quantum (SuperPos a) -> Int
 entropy = S.size . extract
@@ -173,14 +186,18 @@ minEntropy w h q = minimumBy (comparing fst) $ do
   x <- [0..w-1]
   y <- [0..h-1]
   let xy = V2 x y
-  pure (f xy)
+  guard $ snd (f xy) > 1
+  pure $ f xy
+
+patternToPixel :: Pattern a -> a
+patternToPixel (Pattern v) = V.head v
 
 blend :: SuperPos PixelRGB8 -> PixelRGB8
 blend ps =
   let unpack (PixelRGB8 r g b) = ZipList [r, g, b]
       elems = fmap unpack $ toList ps
       len = fromIntegral $ length elems
-      ZipList [r', g', b'] = fmap ((`div` len) . sum) $ sequenceA elems
+      ZipList [r', g', b'] = showTrace $ fmap ((`div` max len 1) . sum) $ sequenceA elems
    in PixelRGB8 r' g' b'
 
 render :: Int -> Int -> Quantum (SuperPos PixelRGB8) -> Image PixelRGB8
@@ -191,15 +208,14 @@ render w h (extend (blend . extract) -> q) = generateImage makePixel w h
 
 main :: IO ()
 main = do
-  let q = initialize bricks
+  let w = 100
+      h = 100
       n = 3
-      ps = allPatterns n bricks
-      q' = stamp n (ps !! 200) q
-  writePng "result.png" $ render 100 100 q'
+      q'' = iterate (\q -> q =>> stampFirst n (fst $ minEntropy w h q))
+          $ initialize n bricks
+      q' = q'' !! 0
+  writePng "result.png"
+    . render w h
+    $ extend (S.map patternToPixel . extract) q'
   pure ()
-
--- observe :: Int -> Pattern a -> Quantum SuperPos -> Quantum (Maybe a)
--- observe n p w =
---   let (V2 x y) = pos w
---    in undefined
 
