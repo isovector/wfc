@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving                          #-}
 {-# LANGUAGE NoImplicitPrelude                                   #-}
 {-# LANGUAGE StandaloneDeriving                                  #-}
+{-# LANGUAGE TupleSections                                       #-}
 {-# LANGUAGE TypeApplications                                    #-}
 {-# LANGUAGE ViewPatterns                                        #-}
 {-# OPTIONS_GHC -Wall -fno-warn-orphans -fno-warn-unused-imports #-}
@@ -28,6 +29,9 @@ deriving instance NFData PixelRGB8
 
 showTrace :: Show a => a -> a
 showTrace = trace =<< show
+
+showsTrace :: Show b => (a -> b) -> a -> a
+showsTrace f = trace =<< show . f
 
 bricks :: Image PixelRGB8
 bricks =
@@ -77,8 +81,8 @@ unpackPattern :: Int -> Coord -> Pattern a -> a
 unpackPattern n xy (Pattern v) = v V.! packPosition n xy
 
 
-frequency :: Ord a => [a] -> [(a, Int)]
-frequency = fmap (head &&& length) . groupBy (==) . sort
+frequency :: Ord a => [a] -> [(Int, a)]
+frequency = fmap (length &&& head) . groupBy (==) . sort
 
 
 wrap :: Int  -- ^ v
@@ -144,8 +148,8 @@ initialize
     :: (Pixel a, Ord a, NFData a)
     => Int
     -> Image a
-    -> Quantum (SuperPos (Pattern a))
-initialize n img = store (const . S.fromList $ allPatterns n img) (V2 0 0)
+    -> Quantum (SuperPos (Int, Pattern a))
+initialize n img = store (const . S.fromList . frequency $ allPatterns n img) (V2 0 0)
 
 
 inNSquare :: Int -> Coord -> Bool
@@ -156,14 +160,15 @@ inNSquare n (V2 x y) = and
   , y < n
   ]
 
-stampFirst
-    :: Eq a
-    => Int
+observe
+    :: Ord a
+    => Int  -- ^ n
+    -> Int  -- ^ seed
     -> Coord
-    -> Quantum (SuperPos (Pattern a))
-    -> SuperPos (Pattern a)
-stampFirst n xy w =
-  stamp n xy (head . toList $ extract w) w
+    -> Quantum (SuperPos (Int, Pattern a))
+    -> SuperPos (Int, Pattern a)
+observe n a xy w =
+  stamp n xy (weighted a xy $ extract $ seek xy w) w
 
 
 stamp
@@ -171,16 +176,19 @@ stamp
     => Int
     -> Coord
     -> Pattern a
-    -> Quantum (SuperPos (Pattern a))
-    -> SuperPos (Pattern a)
+    -> Quantum (SuperPos (Int, Pattern a))
+    -> SuperPos (Int, Pattern a)
 stamp n xy p w =
   let dxy@(V2 dx dy) = pos w - xy
-   in case abs dx <= n && abs dy <= n of
-        True -> S.filter (\p' -> agrees n dxy p p') $ extract w
+   in case abs dx < n && abs dy < n of
+        True -> S.filter (\(snd -> p') -> agrees n dxy p p')
+                  $ extract w
         False -> extract w
+
 
 entropy :: Quantum (SuperPos a) -> Int
 entropy = S.size . extract
+
 
 minEntropy :: Int -> Int -> Quantum (SuperPos a) -> (Coord, Int)
 minEntropy w h q = minimumBy (comparing fst) $ do
@@ -191,16 +199,10 @@ minEntropy w h q = minimumBy (comparing fst) $ do
   guard $ snd (f xy) > 1
   pure $ f xy
 
+
 patternToPixel :: Pattern a -> a
 patternToPixel (Pattern v) = V.head v
 
--- blend :: SuperPos PixelRGB8 -> PixelRGB8
--- blend ps =
---   let unpack = \(PixelRGB8 r g b) -> ZipList [r, g, b]
---       elems = fmap unpack $ toList ps
---       len = fromIntegral $ length elems
---       ZipList [r', g', b'] = fmap ((`div` len) . sum) $ sequenceA elems
---    in PixelRGB8 r' g' b'
 
 blend :: SuperPos PixelRGB8 -> PixelRGB8
 blend ps
@@ -213,22 +215,42 @@ blend ps
             fmap (fromIntegral . (`div` len) . sum . fmap fromIntegral) $ sequenceA elems
       in PixelRGB8 r' g' b'
 
+
 render :: Int -> Int -> Quantum (SuperPos PixelRGB8) -> Image PixelRGB8
 render w h (extend (blend . extract) -> q) = generateImage makePixel w h
   where
     makePixel x y = peek (V2 x y) q
 
 
+twist :: Int -> Coord -> Integer
+twist a (V2 x y) = (fromIntegral x ^ (5 :: Int) + fromIntegral y ^ (3 :: Int))
+  `div` fromIntegral a
+
+
+weighted :: Int -> Coord -> SuperPos (Int, a) -> a
+weighted a xy (S.toList -> s) =
+  let size = sum $ fmap fst s
+      total = join $ fmap (uncurry replicate) s
+   in total !! (fromIntegral (twist a xy `mod` fromIntegral size))
+
+
 main :: IO ()
 main = do
-  let w = 10
-      h = 10
-      n = 2
-      q'' = iterate (\q -> q =>> stampFirst n (fst $ showTrace $ minEntropy w h q))
-          $ initialize n bricks
-      q' = q'' !! 20
+  let w = 32
+      h = 32
+      n = 3
+      q'' = iterate
+              (\(a, q) ->
+                (a+1,) $
+                  q =>>
+                    (observe n (showTrace a)
+                      $ fst
+                    $ showTrace
+                      $ minEntropy w h q))
+          $ (2, initialize n bricks)
+      q' = snd $ q'' !! 20
   writePng "result.png"
     . render w h
-    $ extend (S.map patternToPixel . extract) q'
+    $ extend (S.map patternToPixel . S.map snd . extract) q'
   pure ()
 
