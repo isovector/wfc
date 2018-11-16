@@ -33,6 +33,8 @@ dependencies:
 - comonad
 - deepseq
 - adjunctions
+- distributive
+- hashable
 
 library:
   source-dirs: src

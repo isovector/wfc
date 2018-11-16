@@ -1,31 +1,58 @@
-{-# LANGUAGE DeriveAnyClass                                      #-}
-{-# LANGUAGE DeriveGeneric                                       #-}
-{-# LANGUAGE DerivingStrategies                                  #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving                          #-}
-{-# LANGUAGE NoImplicitPrelude                                   #-}
-{-# LANGUAGE StandaloneDeriving                                  #-}
-{-# LANGUAGE TupleSections                                       #-}
-{-# LANGUAGE TypeApplications                                    #-}
-{-# LANGUAGE ViewPatterns                                        #-}
+{-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE DeriveAnyClass             #-}
+{-# LANGUAGE DeriveFunctor              #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE DerivingStrategies         #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures             #-}
+{-# LANGUAGE NoImplicitPrelude          #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE TupleSections              #-}
+{-# LANGUAGE TypeApplications           #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE ViewPatterns               #-}
+
 {-# OPTIONS_GHC -Wall -fno-warn-orphans -fno-warn-unused-imports #-}
 
 module Lib where
 
-import Data.Functor.Rep
-import Control.DeepSeq
-import Control.Comonad
-import Control.Comonad.Store
-import Control.Lens
-import Data.Coerce
-import qualified Data.Vector as V
-import Codec.Picture
-import BasePrelude hiding (peek)
-import Linear.V2
-import Linear.Matrix hiding (trace)
+import           BasePrelude hiding (peek)
+import           Codec.Picture
+import           Control.Comonad
+import           Control.Comonad.Representable.Store
+import           Control.DeepSeq
+import           Control.Lens
+import           Data.Coerce
+import           Data.Distributive
+import           Data.Functor.Compose (Compose (..))
+import           Data.Functor.Rep
 import qualified Data.Set as S
+import qualified Data.Vector as V
+import           GHC.TypeLits
+import           Linear.Matrix hiding (trace)
+import           Linear.V2
 
 deriving instance Generic PixelRGB8
 deriving instance NFData PixelRGB8
+
+
+newtype Grid (width :: Nat) (height :: Nat) a = Grid
+    { getGrid :: Compose V.Vector V.Vector a
+    }
+  deriving (Functor, Show, Foldable, Eq)
+
+instance (KnownNat m, KnownNat n) => Distributive (Grid m n) where
+  distribute = distributeRep
+
+instance (KnownNat m, KnownNat n) => Representable (Grid m n) where
+  type Rep (Grid m n) = Coord
+  index (Grid (Compose v)) (V2 x y) = v V.! x V.! y
+  tabulate f = Grid . Compose $ V.generate (fromIntegral $ natVal $ Proxy @m) go
+    where
+      go x = V.generate (fromIntegral $ natVal $ Proxy @n) (\y -> f (V2 x y))
+
+
 
 showTrace :: Show a => a -> a
 showTrace = trace =<< show
@@ -140,7 +167,9 @@ allPatterns n img = force $ do
     -- , refMat !*! rotMat !*! rotMat !*! rotMat
     ]
 
-type Quantum = Store Coord
+type WIDTH = 32
+type HEIGHT = 32
+type Quantum = Store (Grid WIDTH HEIGHT)
 
 type SuperPos = S.Set
 
@@ -190,14 +219,16 @@ entropy :: Quantum (SuperPos a) -> Int
 entropy = S.size . extract
 
 
-minEntropy :: Int -> Int -> Quantum (SuperPos a) -> (Coord, Int)
-minEntropy w h q = minimumBy (comparing fst) $ do
-  let f = fst . runStore $ q =>> pos &&& entropy
-  x <- [0..w-1]
-  y <- [0..h-1]
-  let xy = V2 x y
-  guard $ snd (f xy) > 1
-  pure $ f xy
+minEntropy :: Quantum (SuperPos a) -> (Coord, Int)
+minEntropy q = minimumBy (comparing fst) $ do
+    let f = fst . runStore $ q =>> pos &&& entropy
+    x <- [0..w-1]
+    y <- [0..h-1]
+    let xy = V2 x y
+    guard $ snd (f xy) > 1
+    pure $ f xy
+  where
+    (w, h) = getSize q
 
 
 patternToPixel :: Pattern a -> a
@@ -215,11 +246,16 @@ blend ps
             fmap (fromIntegral . (`div` len) . sum . fmap fromIntegral) $ sequenceA elems
       in PixelRGB8 r' g' b'
 
+getSize :: forall m n a. (KnownNat m, KnownNat n) => Store (Grid m n) a -> (Int, Int)
+getSize _ = ( fromIntegral . natVal $ Proxy @m
+            , fromIntegral . natVal $ Proxy @n
+            )
 
-render :: Int -> Int -> Quantum (SuperPos PixelRGB8) -> Image PixelRGB8
-render w h (extend (blend . extract) -> q) = generateImage makePixel w h
+
+render :: Quantum (SuperPos PixelRGB8) -> Image PixelRGB8
+render q = uncurry (generateImage makePixel) $ getSize q
   where
-    makePixel x y = peek (V2 x y) q
+    makePixel x y = peek (V2 x y) $ extend (blend . extract) q
 
 
 twist :: Int -> Coord -> Integer
@@ -236,9 +272,7 @@ weighted a xy (S.toList -> s) =
 
 main :: IO ()
 main = do
-  let w = 32
-      h = 32
-      n = 3
+  let n = 3
       q'' = iterate
               (\(a, q) ->
                 (a+1,) $
@@ -246,11 +280,11 @@ main = do
                     (observe n (showTrace a)
                       $ fst
                     $ showTrace
-                      $ minEntropy w h q))
+                      $ minEntropy q))
           $ (2, initialize n bricks)
-      q' = snd $ q'' !! 20
+      q' = snd $ q'' !! 400
   writePng "result.png"
-    . render w h
+    . render
     $ extend (S.map patternToPixel . S.map snd . extract) q'
   pure ()
 
