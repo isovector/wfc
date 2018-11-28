@@ -35,6 +35,8 @@ dependencies:
 - adjunctions
 - distributive
 - hashable
+- hspec
+- QuickCheck
 
 library:
   source-dirs: src
@@ -60,3 +62,5 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - wfc
+    - hspec
+    - QuickCheck
