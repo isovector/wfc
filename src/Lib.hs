@@ -19,7 +19,7 @@
 
 module Lib where
 
-import           BasePrelude hiding (peek)
+import           BasePrelude hiding (peek, rotate)
 import           Codec.Picture
 import           Control.Comonad
 import           Control.Comonad.Representable.Store
@@ -99,21 +99,19 @@ newtype Pattern a = Pattern
 
 type Coord = V2 Int
 
-rotMat :: M22 Int
-rotMat = V2 (V2 0 (-1)) (V2 1 0)
 
-refMat :: M22 Int
-refMat = V2 (V2 (-1) 0) (V2 0 (-1))
+packPattern :: Pixel a => Int -> (Coord -> Coord) -> Coord -> Image a -> Maybe (Pattern a)
+packPattern n f xy img = fmap (Pattern . V.fromList) . sequenceA $ do
+  y' <- [0..n-1]
+  x' <- [0..n-1]
+  let dxy = f $ V2 x' y'
+  pure $ samplePixel img $ xy + dxy
 
-refRotMat :: M22 Int
-refRotMat = refMat !*! rotMat
-
-
-packPattern :: Pixel a => Int -> Coord -> Image a -> Pattern a
-packPattern n (V2 x y) img = Pattern . V.fromList $ do
-  y' <- [y..y+n-1]
-  x' <- [x..x+n-1]
-  pure $ pixelAt img x' y'
+samplePixel :: Pixel a => Image a -> Coord -> Maybe a
+samplePixel img (V2 x y) = do
+  guard $ x >= 0 && x < imageWidth img
+  guard $ y >= 0 && y < imageHeight img
+  pure $ pixelAt img x y
 
 packPosition :: Int -> Coord -> Int
 packPosition n (V2 x y) = y * n + x
@@ -155,15 +153,19 @@ allPatterns
     -> Image a
     -> [Pattern a]
 allPatterns n img = force $ do
-  y <- [0..imageHeight img]
-  x <- [0..imageWidth img]
-  guard $ x + n <= imageWidth img
-  guard $ y + n <= imageHeight img
+  y <- [0..imageHeight img-1]
+  x <- [0..imageWidth img-1]
   let xy = V2 x y
-  coerce $ fmap (\c -> packPattern n (c !* xy) img)
+  fromMaybe [] . sequenceA $ fmap (\c -> packPattern n c xy img)
     -- TODO(sandy): this transforms should be in local space, not img space
-    [ identity
-    -- , refMat
+    [ id
+    , reflect n
+    , rotate n
+    , reflect n . rotate n
+    , rotate n  . rotate n
+    , reflect n . rotate n . rotate n
+    , rotate n  . rotate n . rotate n
+    , reflect n . rotate n . rotate n . rotate n
     -- , rotMat
     -- , refMat !*! rotMat
     -- , rotMat !*! rotMat
@@ -171,6 +173,17 @@ allPatterns n img = force $ do
     -- , rotMat !*! rotMat !*! rotMat
     -- , refMat !*! rotMat !*! rotMat !*! rotMat
     ]
+
+rotMat :: Num a => M22 a
+rotMat = V2 (V2 0 (-1))
+            (V2 1 0)
+
+reflect :: Int -> Coord -> Coord
+reflect n = _x %~ \x -> n - 1 - x
+
+rotate :: Int -> Coord -> Coord
+rotate (subtract 1 -> fromIntegral @_ @Float -> (/2) -> n) (fmap fromIntegral -> xy) =
+  fmap floor $ (+ V2 n n) $ rotMat !* (xy - V2 n n)
 
 type WIDTH = 32
 type HEIGHT = 32
@@ -183,14 +196,6 @@ initialize
     -> Quantum (SuperPos (Int, Pattern a))
 initialize n img = store (const . SuperPos . S.fromList . frequency $ allPatterns n img) (V2 0 0)
 
-
-inNSquare :: Int -> Coord -> Bool
-inNSquare n (V2 x y) = and
-  [ x >= 0
-  , x < n
-  , y >= 0
-  , y < n
-  ]
 
 observe
     :: (Ord a, Show a)
@@ -300,7 +305,7 @@ main = do
                       collapsed = showTrace $ weighted a epos $ peek epos q
                    in q =>> observe n collapsed epos)
           $ (1, initialize n bricks)
-  for_ [0..200] $ \i -> do
+  for_ [499..500] $ \i -> do
     let q' = snd $ q'' !! i
     writePng "result.png"
       . render
