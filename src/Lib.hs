@@ -8,14 +8,16 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures             #-}
 {-# LANGUAGE NoImplicitPrelude          #-}
+{-# LANGUAGE QuasiQuotes                #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE StandaloneDeriving         #-}
+{-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE ViewPatterns               #-}
 
-{-# OPTIONS_GHC -Wall -fno-warn-orphans -fno-warn-unused-imports #-}
+{-# OPTIONS_GHC -Wall -fno-warn-orphans -fno-warn-unused-imports -ddump-splices #-}
 
 module Lib where
 
@@ -29,9 +31,11 @@ import           Data.Coerce
 import           Data.Distributive
 import           Data.Functor.Compose (Compose (..))
 import           Data.Functor.Rep
+import           Data.Generics.Sum
 import qualified Data.Set as S
 import qualified Data.Vector as V
 import           GHC.TypeLits
+import           Language.Haskell.Codo
 import           Linear.Matrix hiding (trace)
 import           Linear.V2
 
@@ -41,6 +45,7 @@ deriving instance NFData PixelRGB8
 data SuperPos a
   = SuperPos (S.Set a)
   | Collapsed a
+  deriving Generic
 
 superposit :: (S.Set a -> S.Set a) -> SuperPos a -> SuperPos a
 superposit _ z@(Collapsed _) = z
@@ -229,6 +234,53 @@ stamp n xy p w =
         Collapsed z -> Collapsed z
 
 
+neighbors :: Coord -> [Coord]
+neighbors (V2 x y) = do
+  dx <- [-1..1]
+  dy <- [-1..1]
+  guard $ not $ dx == 0 && dy == 0
+  pure $ V2 (x + dx) (y + dy)
+
+
+isCollapsing :: SuperPos a -> Maybe a
+isCollapsing (Collapsed _) = Nothing
+isCollapsing (SuperPos ps) = bool Nothing (Just $ head $ toList ps) $ length ps == 1
+
+
+collapse
+    :: Eq a
+    => Int
+    -> Quantum (SuperPos (Pattern a))
+    -> SuperPos (Pattern a)
+collapse n w =
+  case extract w of
+    z@Collapsed{}  -> z
+    x@(SuperPos a) ->
+      case isCollapsing x of
+        Just z  -> Collapsed z
+        Nothing ->
+          let ns   = experiment neighbors $ w =>> pos &&& extract
+              rels = mapMaybe (traverse isCollapsing) ns
+           in SuperPos $ flip S.filter a $ \p' ->
+                flip all rels $ \(xy', p) ->
+                  agrees n (xy - xy') p p'
+  where
+    xy = pos w
+
+
+-- collapse = [codo| w =>
+--     p   <- pos w
+--     ns  <- experiment neighbors w
+--     ns' <- (pos &&& extract) ns
+--     let rels = traverse _ $ extract ns'
+--     ns
+--   |]
+
+
+
+
+
+
 entropy :: Quantum (SuperPos a) -> Int
 entropy w =
   case extract w of
@@ -301,11 +353,11 @@ main = do
       q'' = iterate
               (\(a, q) ->
                 (a+1,) $
-                  let epos = showTrace $ fst $ minEntropy q
-                      collapsed = showTrace $ weighted a epos $ peek epos q
+                  let epos = fst $ minEntropy q
+                      collapsed = weighted a epos $ peek epos q
                    in q =>> observe n collapsed epos)
-          $ (1, initialize n bricks)
-  for_ [499..500] $ \i -> do
+          $ (2, initialize n bricks)
+  for_ [799..800] $ \i -> do
     let q' = snd $ q'' !! i
     writePng "result.png"
       . render

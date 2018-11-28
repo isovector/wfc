@@ -37,6 +37,9 @@ dependencies:
 - hashable
 - hspec
 - QuickCheck
+- lens
+- generic-lens
+- codo-notation
 
 library:
   source-dirs: src
